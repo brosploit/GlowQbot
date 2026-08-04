@@ -30,7 +30,7 @@ from telegram.ext import (
 
 # Configuration
 
-BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8217918188:AAGTVa-HhLk1XLUn2tPw2CLiYVdTIpjMEhA").strip()
+BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8217918188:AAHA49a4vT5P5t-t-C8sS52-A7gxDmbFBBE").strip()
 DB_PATH = os.environ.get("PROFILE_DB_PATH", "profiles.db")
 DEFAULT_ADMIN_PASSWORD = os.environ.get("ADMIN_PANEL_PASSWORD", "changeme123")
 LOG_FILE_PATH = os.environ.get("BOT_LOG_FILE", "bot.log")
