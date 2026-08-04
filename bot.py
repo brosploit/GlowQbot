@@ -25,12 +25,13 @@ from telegram.ext import (
     CallbackQueryHandler,
     ConversationHandler,
     ContextTypes,
+    TypeHandler,
     filters,
 )
 
 # Configuration
 
-BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8217918188:AAHA49a4vT5P5t-t-C8sS52-A7gxDmbFBBE").strip()
+BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 DB_PATH = os.environ.get("PROFILE_DB_PATH", "profiles.db")
 DEFAULT_ADMIN_PASSWORD = os.environ.get("ADMIN_PANEL_PASSWORD", "changeme123")
 LOG_FILE_PATH = os.environ.get("BOT_LOG_FILE", "bot.log")
@@ -283,6 +284,12 @@ def init_db() -> None:
             conn.execute("ALTER TABLE profiles ADD COLUMN credits INTEGER NOT NULL DEFAULT 0")
         if "referred_by" not in existing_columns:
             conn.execute("ALTER TABLE profiles ADD COLUMN referred_by INTEGER")
+        if "tg_username" not in existing_columns:
+            # Telegram @username (distinct from the bot's own chosen `username` field).
+            # Nullable — users without a Telegram username are handled explicitly.
+            # Existing rows simply get NULL here and are backfilled automatically the
+            # next time that user interacts with the bot; no existing data is touched.
+            conn.execute("ALTER TABLE profiles ADD COLUMN tg_username TEXT")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS redeem_codes (
@@ -429,14 +436,34 @@ def _generate_unique_connect_id() -> str:
         if not db("SELECT 1 FROM profiles WHERE connect_id = ?", (candidate,), "val"):
             return candidate
 
-def create_profile(user_id, username, name, age, photo_file_id, bio, gender, orientation, location, referred_by=None) -> str:
+def create_profile(user_id, username, name, age, photo_file_id, bio, gender, orientation, location, referred_by=None, tg_username=None) -> str:
     connect_id = _generate_unique_connect_id()
     db(
-        """INSERT INTO profiles (user_id, connect_id, username, name, age, photo_file_id, bio, gender, orientation, location, referred_by)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (user_id, connect_id, username, name, age, photo_file_id, bio, gender, orientation, location, referred_by),
+        """INSERT INTO profiles (user_id, connect_id, username, name, age, photo_file_id, bio, gender, orientation, location, referred_by, tg_username)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (user_id, connect_id, username, name, age, photo_file_id, bio, gender, orientation, location, referred_by, tg_username),
     )
     return connect_id
+
+# ---- Telegram username tracking ----------------------------------------------
+def sync_tg_username(user_id: int, tg_username) -> None:
+    """Keep the stored Telegram @username in sync with reality. Called on every
+    interaction so renames (or removing a username entirely) are picked up
+    automatically. Uses IS NOT so it's a no-op (no write) when unchanged,
+    and correctly handles users who have no Telegram username (NULL)."""
+    db(
+        "UPDATE profiles SET tg_username = ? WHERE user_id = ? AND tg_username IS NOT ?",
+        (tg_username, user_id, tg_username),
+    )
+
+def build_telegram_profile_link(user_id: int, tg_username) -> str:
+    """A link that opens the user's Telegram profile/chat directly.
+    Prefers the public @username link; falls back to the tg://user deep link
+    (which opens the profile inside Telegram/Telegram Desktop) when the user
+    has no username set."""
+    if tg_username:
+        return f"https://t.me/{tg_username}"
+    return f"tg://user?id={user_id}"
 
 # ---- credits ----------------------------------------------------------------
 def get_credits(user_id: int) -> int:
@@ -463,6 +490,15 @@ def spend_credits(user_id: int, amount: int) -> bool:
 # ---- referrals ----------------------------------------------------------------
 def count_referrals(user_id: int) -> int:
     return db("SELECT COUNT(*) FROM profiles WHERE referred_by = ?", (user_id,), "val") or 0
+
+def get_referral_counts() -> dict:
+    """Referral totals for every user in one query, derived from the existing
+    referred_by column — no separate counter is stored anywhere."""
+    rows = db(
+        "SELECT referred_by, COUNT(*) AS cnt FROM profiles WHERE referred_by IS NOT NULL GROUP BY referred_by",
+        fetch="all",
+    )
+    return {r["referred_by"]: r["cnt"] for r in rows}
 
 # ---- redeem codes -------------------------------------------------------------
 def _generate_unique_redeem_code() -> str:
@@ -531,14 +567,17 @@ def export_profiles_to_excel(path: str) -> int:
     wb = Workbook()
     ws = wb.active
     ws.title = "Users"
-    ws.append(["User ID", "Telegram ID", "Username", "Name", "Age", "Connect ID", "Credits",
+    ws.append(["Telegram Profile", "Username", "Name", "Age", "Connect ID", "Credits",
                "Referred By", "Gender", "Orientation", "Location", "Pref Mode", "Pref Genders",
-               "Pref Orientations", "Bio", "Joined", "Banned"])
+               "Pref Orientations", "Total Referrals", "Joined", "Banned"])
     rows = db("SELECT * FROM profiles ORDER BY created_at", fetch="all")
+    referral_counts = get_referral_counts()
     for r in rows:
-        ws.append([r["user_id"], r["user_id"], r["username"], r["name"], r["age"], r["connect_id"],
+        profile_link = build_telegram_profile_link(r["user_id"], r["tg_username"])
+        ws.append([profile_link, r["username"], r["name"], r["age"], r["connect_id"],
                    r["credits"], r["referred_by"] or "", r["gender"], r["orientation"], r["location"],
-                   r["pref_mode"], r["pref_genders"], r["pref_orientations"], r["bio"], r["created_at"],
+                   r["pref_mode"], r["pref_genders"], r["pref_orientations"],
+                   referral_counts.get(r["user_id"], 0), r["created_at"],
                    "Yes" if is_banned(r["user_id"]) else "No"])
     wb.save(path)
     return len(rows)
@@ -787,6 +826,18 @@ async def reject_if_banned(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 def require_profile_or_prompt(user_id: int) -> bool:
     return profile_exists(user_id)
 
+async def track_telegram_username(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Runs on every single update (messages and button taps alike), before any
+    other handler, so a user's current Telegram @username is always kept up to
+    date — including users who remove their username entirely. Registered in
+    its own handler group with block=False so it never interferes with, delays,
+    or consumes the update that the normal handlers process."""
+    user = update.effective_user
+    if user is None:
+        return
+    if profile_exists(user.id):
+        sync_tg_username(user.id, user.username)
+
 # Basic commands
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1006,6 +1057,7 @@ async def setup_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         photo_file_id=data["photo_file_id"], bio=data["bio"], gender=data["gender"],
         orientation=data["orientation"], location=location_str,
         referred_by=referrer_profile["user_id"] if referrer_profile else None,
+        tg_username=update.effective_user.username,
     )
     context.user_data.clear()
 
@@ -1768,9 +1820,11 @@ def _clear_admin_flow_state(context: ContextTypes.DEFAULT_TYPE) -> None:
         context.user_data.pop(key, None)
 
 async def admin_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if update.effective_user.id in authenticated_admins:
-        await send_admin_menu(update, context)
-        return ADMIN_MENU
+    # Every /admin invocation requires the password — no bypass, no persisted
+    # login session. `authenticated_admins` is intentionally NOT consulted here
+    # (it's still populated on success below, for the unrelated /getid, /whois,
+    # /groupid quick-lookup commands and admin report notifications, which are
+    # separate existing features left unchanged).
     await update.message.reply_text(
         "🔐 Enter the admin panel password:",
         reply_markup=ADMIN_AUTH_CANCEL_KEYBOARD,
@@ -1790,7 +1844,12 @@ async def admin_auth_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await update.message.reply_text("✅ Access granted.")
         await send_admin_menu(update, context)
         return ADMIN_MENU
-    await update.message.reply_text("❌ Incorrect password.")
+    # Wrong password: deny access, expose nothing, and return the user to their
+    # normal menu instead of leaving the admin panel conversation dangling.
+    await update.message.reply_text(
+        "❌ Incorrect password. Access denied.",
+        reply_markup=keyboard_for_user(update.effective_user.id),
+    )
     return ConversationHandler.END
 
 async def admin_back_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -2363,6 +2422,10 @@ def main() -> None:
     init_db()
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
     app.add_error_handler(on_error)
+
+    # Runs before every other handler, on every update, in its own group so it
+    # never blocks/consumes anything — keeps stored Telegram usernames current.
+    app.add_handler(TypeHandler(Update, track_telegram_username, block=False), group=-1)
 
     cancel_fallback = CommandHandler("cancel", generic_cancel)
 
