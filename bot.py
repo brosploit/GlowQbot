@@ -127,11 +127,9 @@ ABTN_MARKET_COST = "💰 Edit Group Cost"
 ABTN_BACK = "🔙 Back"
 ABTN_CLOSE = "❌ Close Admin Panel"
 
-# Shown before a profile exists — only Setup + Help are visible.
 PRE_SETUP_KEYBOARD = ReplyKeyboardMarkup(
     [[BTN_SETUP], [BTN_HELP]],
     resize_keyboard=True,
-    is_persistent=True,
 )
 
 # Shown once a profile exists. Setup never reappears here.
@@ -141,14 +139,12 @@ MAIN_MENU_KEYBOARD = ReplyKeyboardMarkup(
         [BTN_NEXT, BTN_MORE],
     ],
     resize_keyboard=True,
-    is_persistent=True,
 )
 
 # Shown while actively paired with a partner — swaps in Report, drops Start.
 IN_CHAT_KEYBOARD = ReplyKeyboardMarkup(
     [[BTN_NEXT, BTN_STOP], [BTN_REPORT]],
     resize_keyboard=True,
-    is_persistent=True,
 )
 
 MORE_MENU_KEYBOARD = ReplyKeyboardMarkup(
@@ -163,7 +159,6 @@ MORE_MENU_KEYBOARD = ReplyKeyboardMarkup(
         [BTN_BACK],
     ],
     resize_keyboard=True,
-    is_persistent=True,
 )
 
 def build_admin_menu_keyboard() -> InlineKeyboardMarkup:
@@ -737,8 +732,7 @@ def format_profile_caption(profile: dict, header: str) -> str:
     return (
         f"{header}\n\n"
         f"👤 @{profile['username']} — {profile['name']}, {profile['age']}\n"
-        f"⚧ {profile['gender']}\n"
-        f"💞 {profile['orientation']}\n"
+        f"⚧ {profile['gender']} — {profile['orientation']}\n"
         f"📍 {profile['location']}\n"
         f"📝 {profile['bio']}\n"
         f"{rating_line_for(profile['user_id'])}\n"
@@ -964,6 +958,7 @@ async def setup_bio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     keyboard = ReplyKeyboardMarkup(with_cancel(rows_of(GENDER_OPTIONS)), resize_keyboard=True)
     await update.message.reply_text("*Step 6* — Select your gender:", parse_mode="Markdown", reply_markup=keyboard)
     return GENDER
+
 
 async def setup_gender(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     gender = update.message.text.strip()
@@ -2046,8 +2041,7 @@ async def admin_view_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         f"🆔 Telegram user ID: `{profile['user_id']}`\n"
         f"🔑 Connect ID: `{profile['connect_id']}`\n"
         f"👤 Name: {profile['name']}, {profile['age']}\n"
-        f"⚧ Gender: {profile['gender']}\n"
-        f"💞 Orientation: {profile['orientation']}\n"
+        f"⚧ Gender: {profile['gender']} — Orientation: {profile['orientation']}\n"
         f"📍 Location: {profile['location']}\n"
         f"📝 Bio: {profile['bio']}\n"
         f"🎯 Preferences: mode={profile['pref_mode']}, "
