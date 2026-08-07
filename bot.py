@@ -95,7 +95,6 @@ BTN_ENTER_ID = "🔑 Connect by ID"
 BTN_PREFERENCES = "⚙️ Preferences"
 BTN_EDIT = "✏️ Edit Profile"
 BTN_MY_PROFILE = "👤 My Profile"
-BTN_DELETE = "🗑 Delete Profile"
 BTN_REPORT = "🚩 Report User"
 BTN_TERMS = "📜 Terms & Conditions"
 BTN_HELP = "ℹ️ Help"
@@ -155,8 +154,7 @@ MORE_MENU_KEYBOARD = ReplyKeyboardMarkup(
         [BTN_CREDITS, BTN_REFERRAL],
         [BTN_REDEEM, BTN_MARKETPLACE],
         [BTN_NOTICES, BTN_REPORT],
-        [BTN_TERMS, BTN_DELETE],
-        [BTN_HELP],
+        [BTN_TERMS, BTN_HELP],
         [BTN_BACK],
     ],
     resize_keyboard=True,
@@ -212,7 +210,6 @@ PUBLIC_COMMANDS = [
     BotCommand("setup", "Create your profile"),
     BotCommand("profile", "View your profile"),
     BotCommand("edit", "Edit your profile"),
-    BotCommand("delete", "Delete your profile"),
     BotCommand("find", "Find a random chat partner"),
     BotCommand("next", "Skip to a new partner"),
     BotCommand("stop", "End the current chat"),
@@ -559,9 +556,6 @@ def set_preferences(user_id: int, mode: str, genders: list, orientations: list) 
         (mode, ",".join(genders), ",".join(orientations), user_id),
     )
 
-def delete_profile(user_id: int) -> None:
-    db("DELETE FROM profiles WHERE user_id = ?", (user_id,))
-
 def export_profiles_to_excel(path: str) -> int:
     from openpyxl import Workbook
     wb = Workbook()
@@ -880,7 +874,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "📝 /setup — Create your profile\n"
         "✏️ /edit — Edit name, photo, bio, gender, or orientation\n"
         "👤 /profile — View your saved profile\n"
-        "🗑 /delete — Delete your profile\n"
         "⚙️ /preferences — Choose who you want to match with\n"
         "🚀 /find — Get matched with a random stranger\n"
         "🔑 /connect <id> — Connect directly using someone's 6-digit ID\n"
@@ -1209,42 +1202,6 @@ async def edit_apply_orientation(update: Update, context: ContextTypes.DEFAULT_T
     update_profile_field(user_id, "orientation", orientation)
     await update.message.reply_text("✅ Orientation updated!", reply_markup=edit_menu_keyboard())
     return EDIT_MENU
-
-# /delete conversation
-
-async def delete_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user_id = update.effective_user.id
-    if not profile_exists(user_id):
-        await update.message.reply_text("You don't have a profile to delete.", reply_markup=PRE_SETUP_KEYBOARD)
-        return ConversationHandler.END
-    keyboard = ReplyKeyboardMarkup([["Yes, delete it", "No, cancel"], [BTN_CANCEL]], resize_keyboard=True)
-    await update.message.reply_text(
-        "⚠️ Are you sure you want to *permanently delete* your profile? This cannot be undone.",
-        parse_mode="Markdown",
-        reply_markup=keyboard,
-    )
-    return DELETE_CONFIRM
-
-
-async def delete_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user_id = update.effective_user.id
-    answer = update.message.text.strip()
-    if answer == BTN_CANCEL:
-        await update.message.reply_text("Cancelled. Your profile was not deleted.", reply_markup=MORE_MENU_KEYBOARD)
-        return ConversationHandler.END
-    if answer.lower() == "yes, delete it":
-        if is_in_chat(user_id):
-            await end_chat_for(user_id, context)
-        remove_from_queue(user_id)
-        clear_pending_for(user_id)
-        delete_profile(user_id)
-        await update.message.reply_text(
-            "🗑️ Your profile has been deleted. Tap 📝 Setup Profile anytime to create a new one.",
-            reply_markup=PRE_SETUP_KEYBOARD,
-        )
-    else:
-        await update.message.reply_text("Cancelled. Your profile was not deleted.", reply_markup=MORE_MENU_KEYBOARD)
-    return ConversationHandler.END
 
 # /preferences conversation
 
@@ -2457,11 +2414,7 @@ def main() -> None:
         fallbacks=[cancel_fallback],
     )
 
-    delete_conv = ConversationHandler(
-        entry_points=[CommandHandler("delete", delete_start), MessageHandler(filters.Text({BTN_DELETE}), delete_start)],
-        states={DELETE_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_confirm)]},
-        fallbacks=[cancel_fallback],
-    )
+
 
     preferences_conv = ConversationHandler(
         entry_points=[CommandHandler("preferences", preferences_start), MessageHandler(filters.Text({BTN_PREFERENCES}), preferences_start)],
@@ -2538,7 +2491,6 @@ def main() -> None:
 
     app.add_handler(setup_conv)
     app.add_handler(edit_conv)
-    app.add_handler(delete_conv)
     app.add_handler(preferences_conv)
     app.add_handler(enter_id_conv)
     app.add_handler(report_conv)
